@@ -32,11 +32,16 @@ import org.openqa.selenium.ie.InternetExplorerDriver;
 import org.openqa.selenium.interactions.Actions;
 import org.openqa.selenium.remote.DesiredCapabilities;
 import org.openqa.selenium.remote.RemoteWebDriver;
+import org.openqa.selenium.safari.SafariDriver;
+import org.openqa.selenium.support.ui.Select;
 import org.testng.Assert;
+import org.testng.Reporter;
+
 import com.thoughtworks.selenium.Wait;
 
 /**
  * BrowserEmulator is based on Selenium2 and adds some enhancements
+ * @author ChenKan
  */
 public class BrowserEmulator {
 
@@ -45,13 +50,13 @@ public class BrowserEmulator {
 	ChromeDriverService chromeServer;
 	JavascriptExecutor javaScriptExecutor;
 	
-	int stepInterval = Integer.parseInt(GlobalSettings.StepInterval);
-	int timeout = Integer.parseInt(GlobalSettings.Timeout);
+	int stepInterval = Integer.parseInt(GlobalSettings.stepInterval);
+	int timeout = Integer.parseInt(GlobalSettings.timeout);
 	
 	private static Logger logger = Logger.getLogger(BrowserEmulator.class.getName());
 
 	public BrowserEmulator() {
-		setupBrowserCoreType(GlobalSettings.BrowserCoreType);
+		setupBrowserCoreType(GlobalSettings.browserCoreType);
 		browser = new WebDriverBackedSelenium(browserCore, "http://www.163.com/");
 		javaScriptExecutor = (JavascriptExecutor) browserCore;
 		logger.info("Started BrowserEmulator");
@@ -64,7 +69,7 @@ public class BrowserEmulator {
 			return;
 		}
 		if (type == 2) {
-			chromeServer = new ChromeDriverService.Builder().usingDriverExecutable(new File(GlobalSettings.ChromeDriverPath)).usingAnyFreePort().build();
+			chromeServer = new ChromeDriverService.Builder().usingDriverExecutable(new File(GlobalSettings.chromeDriverPath)).usingAnyFreePort().build();
 			try {
 				chromeServer.start();
 			} catch (IOException e) {
@@ -77,11 +82,16 @@ public class BrowserEmulator {
 			return;
 		}
 		if (type == 3) {
-			System.setProperty("webdriver.ie.driver", GlobalSettings.IEDriverPath);
+			System.setProperty("webdriver.ie.driver", GlobalSettings.ieDriverPath);
 			DesiredCapabilities capabilities = DesiredCapabilities.internetExplorer();
 			capabilities.setCapability(InternetExplorerDriver.INTRODUCE_FLAKINESS_BY_IGNORING_SECURITY_DOMAINS, true);
 			browserCore = new InternetExplorerDriver(capabilities);
 			logger.info("Using IE");
+			return;
+		}
+		if (type == 4) {
+			browserCore = new SafariDriver();
+			logger.info("Using Safari");
 			return;
 		}
 
@@ -134,7 +144,7 @@ public class BrowserEmulator {
 	public void quit() {
 		pause(stepInterval);
 		browserCore.quit();
-		if (GlobalSettings.BrowserCoreType == 2) {
+		if (GlobalSettings.browserCoreType == 2) {
 			chromeServer.stop();
 		}
 		logger.info("Quitted BrowserEmulator");
@@ -209,28 +219,26 @@ public class BrowserEmulator {
 
 	/**
 	 * Hover on the page element
+	 * 
 	 * @param xpath
 	 *            the element's xpath
 	 */
 	public void mouseOver(String xpath) {
 		pause(stepInterval);
 		expectElementExistOrNot(true, xpath, timeout);
-
-		if (GlobalSettings.BrowserCoreType == 1) {
-			Assert.fail("Mouseover is not supported for Firefox now");
+		// First make mouse out of browser
+		Robot rb = null;
+		try {
+			rb = new Robot();
+		} catch (AWTException e) {
+			e.printStackTrace();
 		}
-		if (GlobalSettings.BrowserCoreType == 2) {
-			// First make mouse out of browser
-			Robot rb = null;
-			try {
-				rb = new Robot();
-			} catch (AWTException e) {
-				e.printStackTrace();
-			}
-			rb.mouseMove(0, 0);
-			
-			// Then hover
-			WebElement we = browserCore.findElement(By.xpath(xpath));
+		rb.mouseMove(0, 0);
+
+		// Then hover
+		WebElement we = browserCore.findElement(By.xpath(xpath));
+
+		if (GlobalSettings.browserCoreType == 2) {
 			try {
 				Actions builder = new Actions(browserCore);
 				builder.moveToElement(we).build().perform();
@@ -241,11 +249,24 @@ public class BrowserEmulator {
 
 			logger.info("Mouseover " + xpath);
 			return;
-		} 
-		if (GlobalSettings.BrowserCoreType == 3) {
-			Assert.fail("Mouseover is not supported for IE now");
 		}
-		
+
+		// Firefox and IE require multiple cycles, more than twice, to cause a
+		// hovering effect
+		if (GlobalSettings.browserCoreType == 1
+				|| GlobalSettings.browserCoreType == 3) {
+			for (int i = 0; i < 5; i++) {
+				Actions builder = new Actions(browserCore);
+				builder.moveToElement(we).build().perform();
+			}
+			logger.info("Mouseover " + xpath);
+			return;
+		}
+
+		// Selenium doesn't support the Safari browser
+		if (GlobalSettings.browserCoreType == 4) {
+			Assert.fail("Mouseover is not supported for Safari now");
+		}
 		Assert.fail("Incorrect browser type");
 	}
 
@@ -424,12 +445,13 @@ public class BrowserEmulator {
 	 * Pause
 	 * @param time in millisecond
 	 */
-	private void pause(int time) {
+	public void pause(int time) {
 		if (time <= 0) {
 			return;
 		}
 		try {
 			Thread.sleep(time);
+			logger.info("Pause " + time + " ms");
 		} catch (InterruptedException e) {
 			e.printStackTrace();
 		}
@@ -439,6 +461,31 @@ public class BrowserEmulator {
 		String png = LogTools.screenShot(this);
 		String log = notice + " >> capture screenshot at " + png;
 		logger.error(log);
+		if (GlobalSettings.baseStorageUrl.lastIndexOf("/") == GlobalSettings.baseStorageUrl.length()) {
+			GlobalSettings.baseStorageUrl = GlobalSettings.baseStorageUrl.substring(0, GlobalSettings.baseStorageUrl.length() - 1);
+		}
+		Reporter.log(log + "<br/><img src=\"" + GlobalSettings.baseStorageUrl + "/" + png + "\" />");
 		Assert.fail(log);
+	}
+	
+	/**
+	 * Return text from specified web element.
+	 * @param xpath
+	 * @return
+	 */
+	public String getText(String xpath) {
+		WebElement element = this.getBrowserCore().findElement(By.xpath(xpath)); 
+		return element.getText();
+	}
+	
+	/**
+	 * Select an option by visible text from &lt;select&gt; web element.
+	 * @param xpath
+	 * @param option
+	 */
+	public void select(String xpath, String option) {
+		WebElement element = this.browserCore.findElement(By.xpath(xpath));
+		Select select = new Select(element);
+		select.selectByVisibleText(option);
 	}
 }
